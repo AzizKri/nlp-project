@@ -1,3 +1,4 @@
+import ast
 import csv
 import os
 import random
@@ -11,17 +12,15 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.model_selection import train_test_split
 from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import RandomForestClassifier
+from sklearn.naive_bayes import BernoulliNB, MultinomialNB
 from sklearn.metrics import accuracy_score
 
-
 # Read out dataset
-data = pandas.read_csv('data2.csv', encoding='latin-1')
-# data.values[0][0] -> Sentence
-# data.values[0][1] -> Sentiment
+# data.values[0][0] -> Sentiment
+# data.values[0][1] -> Sentence
 # 0: Negative
-# 2: Neutral
 # 4: Positive
-
+data = pandas.read_csv('files/data2.csv', encoding='latin-1')
 
 # Initialize
 stemmer = SnowballStemmer('english')
@@ -42,9 +41,14 @@ def preprocess_single(tweet):
     # We make sure to ignore @mentions and non-alphabetical letters
     words = tk.tokenize(tweet)
     corrected_words = []
+
     for word in words:
         if word.isalpha():
             corrected_words.append(word)
+
+    # # Currently commented out because it takes extremely long and we were tight on time. Comment the above for loop
+    # # and uncomment the below if you would like to correct misspellings
+
     # for word in words:
     #     if word.isalpha() and word[0].isupper():
     #         corrected = sc.correction(word)
@@ -57,31 +61,29 @@ def preprocess_single(tweet):
 
     # Finally we remove the stop words as they often give no value to the sentence in this method
     preprocessed_words = [word for word in stemmed_words if word.casefold() not in stop_words]
-
     return preprocessed_words
 
 
 # Preprocessing an entire pandas dataset
 def preprocess_document(document):
     print("Checking for previous preprocessed data...")
-    if os.path.isfile('preprocessed_data.csv'):
+    if os.path.isfile('files/preprocessed_data.csv'):
         print("Loading previous data...")
-        reader = csv.reader(open('preprocessed_data.csv'))
+        reader = csv.reader(open('files/preprocessed_data.csv'))
         previous_data = list(reader)
-        preprocessed_data = [" ".join(row) for row in previous_data]
+        preprocessed_data = [(row[0], ast.literal_eval(row[1])) for row in previous_data]
         return preprocessed_data
     else:
         print("Preprocessing...")
         doc = []
-        doc_words = []
         for row in document.values:
-            new_row_words = preprocess_single(row[0])
-            doc_words.append(new_row_words)
-            new_row = " ".join(new_row_words)
-            doc.append(new_row)
-        print("Preprocessed!")
-        print("Saving...")
-        save_to_csv(doc_words, "preprocessed_data.csv")
+            new_row = preprocess_single(row[1])
+            if len(new_row) < 1:
+                continue
+            else:
+                doc.append((row[0], new_row))
+        print("Preprocessed! Saving...")
+        save_to_csv(doc, "files/preprocessed_data.csv")
         print("Saved!")
         return doc
 
@@ -93,24 +95,26 @@ def save_to_csv(pdata, filename):
         writer.writerows(pdata)
 
 
-def train(vectors):
+def train(vectors, labels):
     # X is the sentence
     # Y is the label
-    print("Labeling...")
-    labels = []
-    for row in data.values:
-        labels.append(row[1])
 
-    print("Splitting...")
     # Split the data into training and testing sets
     x_train, x_test, y_train, y_test = train_test_split(vectors, labels, test_size=0.2, random_state=82)
 
-    print("Training...")
     # Initialize and train the model
-    model = RandomForestClassifier(n_jobs=-1, verbose=1)
+    # Try RandomForestClassifier, LogisticRegression, BernoulliNB, MultinomialNB
+    model = RandomForestClassifier(n_jobs=7, verbose=2, max_depth=128, n_estimators=100)
+    # n_jobs is for how many CPU threads it should use
+    # verbose is the level of logging that it should print while training
+    # max_depth is for the maximum depth within a tree
+    # n_estimators is the amount of decision trees in the forest
+    print("Initialized model. Training...")
     model.fit(x_train, y_train)
+    print("Dumping...")
     pickle.dump((tfidf_vectorizer, model), open("files/model.pkl", "wb"))
 
+    print("Predicting")
     # Predict sentiment labels on the testing set
     y_pred = model.predict(x_test)
 
@@ -126,33 +130,59 @@ def build_model():
     # Fit the vectorizer to the preprocessed data and transform the data into TF-IDF vectors
     # This gives us, for every row of data, the TF-IDF score for every word in every sentence
     # (Sentence, Vocab) TF-IDF Score
-    tfidf_vectors = tfidf_vectorizer.fit_transform(preprocessed_data)
+    vocabs = [" ".join(row[1]) for row in preprocessed_data]
+    sentiment = [row[0] for row in preprocessed_data]
+    tfidf_vectors = tfidf_vectorizer.fit_transform(vocabs)
 
-    # Train out data using the logistic regression method
-    train(tfidf_vectors)
+    # Train out data
+    train(tfidf_vectors, sentiment)
 
 
 def main():
     build_model()
     vectorizer, model = pickle.load(open("files/model.pkl", "rb"))
 
-    # text = input("Enter the text you would like to analyze: ")
-    # while text != "0":
-    #     preprocessed_text = preprocess_single(text)
-    #     tfidf_vectors = vectorizer.transform(preprocessed_text)
-    #     prediction = model.predict(tfidf_vectors)
-    #     print(prediction)
-    #     text = input("Enter the text you would like to analyze: ")
-
-    for i in range(10):
-        text = data.values[random.randint(0, 2999)][0]
-        preprocessed_text = preprocess_single(text)
-        tfidf_vectors = vectorizer.transform(preprocessed_text)
-        prediction = model.predict(tfidf_vectors)
-        print(text)
-        print(preprocessed_text)
-        print(prediction)
-        print("---------------")
+    text_mode = 0
+    # 0 Custom
+    # 1 Random from dataset
+    if text_mode == 0:
+        # Custom text
+        text = input("Enter the text you would like to analyze: ")
+        while text != "0":
+            preprocessed_text = preprocess_single(text)
+            if len(preprocessed_text) < 1:
+                print("Sentence too short")
+            else:
+                tfidf_vectors = vectorizer.transform(preprocessed_text)
+                prediction = model.predict(tfidf_vectors)
+                print(prediction)
+                pos = 0
+                for num in prediction:
+                    if num == 4:
+                        pos += 1
+                result = (pos/len(prediction))
+                print("Positive" if result >= 1/7 else "Negative")
+            text = input("Enter the text you would like to analyze: ")
+    elif text_mode == 1:
+        # Random text from the dataset
+        text = ""
+        while text != "0":
+            text = data.values[random.randint(0, 1000000)][1]
+            print(text)
+            preprocessed_text = preprocess_single(text)
+            while len(preprocessed_text) < 1:
+                text = data.values[random.randint(0, 1000000)][1]
+                preprocessed_text = preprocess_single(text)
+            tfidf_vectors = vectorizer.transform(preprocessed_text)
+            prediction = model.predict(tfidf_vectors)
+            print(prediction)
+            pos = 0
+            for num in prediction:
+                if num == 4:
+                    pos += 1
+            result = (pos/len(prediction))
+            print("Positive" if result >= 1/7 else "Negative")
+            text = input("---------------")
 
 
 main()
